@@ -1,10 +1,12 @@
 // Copyright (C) 2017-2026 Smart code 203358507
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useGoBack, useNavigateWithOrigin } from 'stremio-router';
 import { HorizontalNavBar } from 'stremio/components/NavBar';
+import { useParty } from 'stremio/party/PartyProvider';
+import { getPartyMedia, sameMedia } from 'stremio/party/model';
 import DelayedRenderer from 'stremio/components/DelayedRenderer';
 import { useContentGamepadNavigation } from 'stremio/services/GamepadNavigation';
 import { useProfile, withCoreSuspender } from 'stremio/common';
@@ -163,6 +165,13 @@ const Details = () => {
     const metaPath = details.selected?.metaPath ?? null;
     const metaLoading = details.metaItem?.content.type === 'Loading';
     const streamPath = details.selected?.streamPath ?? null;
+    const { room: partyRoom, reportMovie, isHost: partyHost } = useParty();
+    const streamId = metaPath?.id === id && metaPath?.type === type ? streamPath?.id : undefined;
+    const partyMedia = useMemo(() => getPartyMedia(type, id, videoId ?? streamId), [type, id, videoId, streamId]);
+    const isPartyStream = partyRoom !== null && partyRoom.media !== null && sameMedia(partyMedia, partyRoom.media);
+    useEffect(() => {
+        if (type === 'movie' && !videoId && partyMedia) reportMovie(location.key, partyMedia);
+    }, [type, videoId, partyMedia, location.key, reportMovie]);
     const video = useMemo(() => {
         return streamPath !== null && metaItem !== null ?
             metaItem.videos.find((video) => video.id === streamPath.id) ?? null
@@ -267,6 +276,13 @@ const Details = () => {
                         isMobile={isMobile}
                     />
                 </div>
+                {isPartyStream && (
+                    <p className={styles['party-stream-notice']} role={'status'}>
+                        {partyHost ?
+                            t('WATCH_PARTY_SHARED_TITLE', { defaultValue: 'Watch Party · This title is shared. Choose your stream.' }) :
+                            t('WATCH_PARTY_FOLLOWED_TITLE', { defaultValue: 'Watch Party · Your host opened this title. Choose your stream.' })}
+                    </p>
+                )}
                 {
                     streamPath !== null ?
                         <Streams

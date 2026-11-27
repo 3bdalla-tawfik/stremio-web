@@ -23,7 +23,7 @@ if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) {
 
 $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
 $mainScript = Get-ChildItem -LiteralPath $build -Filter 'main.js' -File -Recurse | Select-Object -First 1
-if (!$config.databaseURL -or !$mainScript -or !(Select-String -LiteralPath $mainScript.FullName -SimpleMatch $config.databaseURL -Quiet)) {
+if (!$config.projectId -or !$mainScript -or !(Select-String -LiteralPath $mainScript.FullName -SimpleMatch $config.projectId -Quiet)) {
     throw 'The current build does not use the configured Firebase project. Build it with PARTY_FIREBASE_CONFIG before packaging.'
 }
 

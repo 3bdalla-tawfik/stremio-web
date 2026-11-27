@@ -1,0 +1,181 @@
+rules_version = '2';
+service cloud.firestore {
+    match /databases/{database}/documents {
+        function roomPath(code) {
+            return /databases/$(database)/documents/watchParties/$(code);
+        }
+
+        function memberPath(code, uid) {
+            return /databases/$(database)/documents/watchParties/$(code)/members/$(uid);
+        }
+
+        function ownedBy(room) {
+            return room.host == request.auth.uid;
+        }
+
+        function withinLifetime(room) {
+            return request.time < room.createdAt + duration.value(12, 'h');
+        }
+
+        function openRoom(room) {
+            return room.endedAt == null && withinLifetime(room);
+        }
+
+        function activeMember(code) {
+            return get(memberPath(code, request.auth.uid)).data.status == 'active';
+        }
+
+        function validMedia(media) {
+            return media is map && media.keys().hasOnly(['type', 'id', 'videoId'])
+                && media.type in ['movie', 'series']
+                && media.id is string && media.id.matches('^[A-Za-z0-9_.:-]{1,160}$')
+                && media.videoId is string && media.videoId.matches('^[A-Za-z0-9_.:-]{1,160}$');
+        }
+
+        function validBuffer(seconds) {
+            return seconds in [1, 2, 3, 5, 10, 15];
+        }
+
+        function validPoint(point) {
+            return point is map && point.keys().hasOnly(['position', 'playing', 'at'])
+                && point.position is int && point.position >= 0 && point.position <= 86400000
+                && point.playing is bool && point.at is int;
+        }
+
+        function validPlayback(playback) {
+            return playback is map && playback.keys().hasOnly(['previous', 'target', 'revision', 'autoResume', 'kind'])
+                && validPoint(playback.previous) && validPoint(playback.target)
+                && playback.revision is int && playback.revision >= 0
+                && playback.autoResume is bool;
+        }
+
+        function initialPlayback(playback) {
+            return validPlayback(playback) && playback.kind == 'initial'
+                && playback.revision == 0 && playback.previous == playback.target
+                && !playback.target.playing && !playback.autoResume;
+        }
+
+        function validName(name) {
+            return name is string && name.size() <= 32 && name.matches('^.*$');
+        }
+
+        function validPermissions(permissions) {
+            return permissions is map && permissions.keys().hasOnly(['playPause', 'seek'])
+                && permissions.playPause is bool && permissions.seek is bool;
+        }
+
+        function freshPlayback(playback) {
+            let now = request.time.toMillis();
+            return playback.previous.at >= now - 5000 && playback.previous.at <= now + 5000
+                && playback.target.at >= now - 5000 && playback.target.at <= now + 5000
+                && playback.target.at >= playback.previous.at;
+        }
+
+        function positionAt(point, at) {
+            return point.position + (point.playing && at > point.at ? at - point.at : 0);
+        }
+
+        function validMemberPlayback(code, room, playback) {
+            let author = get(memberPath(code, request.auth.uid)).data;
+            let host = get(memberPath(code, room.host)).data;
+            let current = playback.previous.at < room.playback.target.at ? room.playback.previous : room.playback.target;
+            let continued = playback.kind == 'pause' ? positionAt(current, playback.target.at) : playback.previous.position;
+            return author.status == 'active' && host.lastSeen is timestamp
+                && request.time < host.lastSeen + duration.value(35, 's')
+                && playback.target.at == playback.previous.at + 750
+                && playback.previous.playing == current.playing
+                && playback.previous.position == positionAt(current, playback.previous.at)
+                && (
+                    (author.permissions.playPause && playback.kind in ['play', 'pause']
+                        && (playback.kind == 'play' ? (!room.playback.target.playing && !room.playback.autoResume) :
+                            (room.playback.target.playing || room.playback.autoResume))
+                        && playback.target.position == continued
+                        && playback.target.playing == (playback.kind == 'play') && !playback.autoResume)
+                    ||
+                    (author.permissions.seek && playback.kind == 'seek' && !playback.target.playing
+                        && playback.autoResume == (room.playback.target.playing || room.playback.autoResume))
+                );
+        }
+
+        function validHostPlayback(code, room, playback) {
+            let lastSeen = get(memberPath(code, room.host)).data.lastSeen;
+            return playback.kind in ['play', 'pause', 'seek', 'buffer', 'hold']
+                && (freshPlayback(playback) || (playback.kind == 'hold'
+                    && lastSeen is timestamp && request.time >= lastSeen + duration.value(35, 's')
+                    && playback.target.at == lastSeen.toMillis() + 35000
+                    && playback.previous.at == playback.target.at
+                    && !playback.target.playing && !playback.autoResume));
+        }
+
+        match /watchParties/{code} {
+            allow get: if request.auth != null && (resource == null ||
+                (withinLifetime(resource.data) && (ownedBy(resource.data) || activeMember(code))));
+
+            allow create: if request.auth != null && code.matches('^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$')
+                && request.resource.data.keys().hasOnly(['host', 'createdAt', 'endedAt', 'media', 'mediaRevision', 'bufferSeconds', 'playback'])
+                && ownedBy(request.resource.data) && request.resource.data.createdAt == request.time
+                && request.resource.data.endedAt == null && request.resource.data.mediaRevision == 0
+                && (request.resource.data.media == null || validMedia(request.resource.data.media))
+                && validBuffer(request.resource.data.bufferSeconds) && initialPlayback(request.resource.data.playback)
+                && getAfter(memberPath(code, request.auth.uid)).data.status == 'active';
+
+            allow update: if request.auth != null && openRoom(resource.data) && validRoomUpdate(code);
+
+            function validRoomUpdate(code) {
+                let next = request.resource.data;
+                let room = resource.data;
+                let changed = next.diff(room).affectedKeys();
+                return (ownedBy(room) && (
+                    (changed.hasOnly(['bufferSeconds']) && validBuffer(next.bufferSeconds))
+                    || (changed.hasOnly(['endedAt']) && next.endedAt == request.time)
+                    || (changed.hasOnly(['media', 'mediaRevision', 'playback']) && validMedia(next.media)
+                        && next.media != room.media && next.mediaRevision == room.mediaRevision + 1
+                        && initialPlayback(next.playback) && next.playback.target.position == 0)
+                )) || (
+                    room.media != null && changed.hasOnly(['playback']) && validPlayback(next.playback)
+                    && next.playback.revision == room.playback.revision + 1
+                    && (ownedBy(room) ? validHostPlayback(code, room, next.playback) :
+                        (freshPlayback(next.playback) && validMemberPlayback(code, room, next.playback)))
+                );
+            }
+
+            match /members/{uid} {
+                allow get: if request.auth != null && (request.auth.uid == uid || canListMembers(code));
+
+                allow list: if request.auth != null && canListMembers(code);
+
+                allow create: if request.auth != null && request.auth.uid == uid
+                    && openRoom(getAfter(roomPath(code)).data)
+                    && request.resource.data.keys().hasOnly(['name', 'status', 'permissions', 'lastSeen', 'heartbeatId'])
+                    && validName(request.resource.data.name) && request.resource.data.status == 'active'
+                    && validPermissions(request.resource.data.permissions)
+                    && !request.resource.data.permissions.playPause && !request.resource.data.permissions.seek
+                    && request.resource.data.lastSeen == null && request.resource.data.heartbeatId == null;
+
+                allow update: if request.auth != null && openRoom(get(roomPath(code)).data)
+                    && resource.data.status == 'active' && validMemberUpdate(code, uid);
+
+                allow delete: if request.auth != null && request.auth.uid == uid && resource.data.status == 'active'
+                    && get(roomPath(code)).data.host != uid;
+
+                function canListMembers(code) {
+                    let room = get(roomPath(code)).data;
+                    return withinLifetime(room) && (ownedBy(room) || activeMember(code));
+                }
+
+                function validMemberUpdate(code, uid) {
+                    let next = request.resource.data;
+                    let changed = next.diff(resource.data).affectedKeys();
+                    return (request.auth.uid == uid && (
+                        (changed.hasOnly(['name']) && validName(next.name))
+                        || (changed.hasOnly(['lastSeen', 'heartbeatId']) && next.lastSeen == request.time
+                            && next.heartbeatId is string && next.heartbeatId.matches('^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$'))
+                    )) || (request.auth.uid != uid && ownedBy(get(roomPath(code)).data) && (
+                        (changed.hasOnly(['permissions']) && validPermissions(next.permissions))
+                        || (changed.hasOnly(['status']) && next.status == 'kicked')
+                    ));
+                }
+            }
+        }
+    }
+}

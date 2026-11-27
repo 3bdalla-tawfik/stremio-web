@@ -10,9 +10,13 @@
 
 `logPartyFailure` — `src/party/firebaseRoom.ts` — log Firebase error codes without invite codes or database paths — `logPartyFailure(operation, failure)`
 
+`memberOnline`, `canControl` — `src/party/model.ts` — evaluate presence and per-member playback permissions — `canControl(isHost, permissions, intent)`
+
+`getRecentParties`, `rememberParty` — `src/party/localPartySettings.ts` — read and update the five most recent device-local rooms — `rememberParty(entry)`
+
 ## Services
 
-`getRoomClient` — `src/party/firebaseRoom.ts` — initialize the party Firebase client and manage rooms, presence, and host commands — `getRoomClient()`
+`getRoomClient` — `src/party/firebaseRoom.ts` — initialize the party Firebase client and manage Firestore rooms, presence, member grants, and playback commands — `getRoomClient()`
 
 `StaticAppServer` — `desktop/StaticAppServer.cs` — serve the bundled interface on loopback while the Windows shell runs — `StaticAppServer(appDirectory, address).Start()`
 

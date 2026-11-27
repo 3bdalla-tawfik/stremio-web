@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { guestPlaybackAction, initialPlayback, nextPlayback, PARTY, STATUS, pointAt, positionAt, validCode, partyCode } from '../src/party/model.ts';
+import { guestPlaybackAction, initialPlayback, nextPlayback, PARTY, STATUS, pointAt, positionAt, validCode, partyCode, COMMAND, MEMBER, NO_PERMISSIONS } from '../src/party/model.ts';
 
 test('scheduled play and pause retain the same media position across delayed deliveries', () => {
     const initial = initialPlayback(10000, 1000);
@@ -42,52 +42,107 @@ test('a guest loads normally before the first frame and keeps playback requested
     assert.equal(guestPlaybackAction({ ...ready, time: 30000 }, { ...point, playing: false }, 1000, true).paused, true);
 });
 
-test('Firebase rules enforce room membership, host playback ownership, and kicking', { skip: process.env.PARTY_FIREBASE_EMULATOR !== '1' }, async () => {
-    const { host, authPort, databasePort, projectId } = PARTY.emulator;
-    const signup = async () => {
-        const response = await fetch(`http://${host}:${authPort}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=${projectId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ returnSecureToken: true }),
-        });
-        assert.equal(response.status, 200);
-        return response.json();
+test('Firestore enforces invite membership, independent playback grants and room transitions', {
+    skip: process.env.PARTY_FIREBASE_EMULATOR !== '1',
+}, async () => {
+    const { initializeApp, deleteApp } = await import('firebase/app');
+    const { getAuth, connectAuthEmulator, signInAnonymously } = await import('firebase/auth');
+    const {
+        getFirestore, connectFirestoreEmulator, doc, getDocFromServer, onSnapshot, serverTimestamp,
+        setDoc, updateDoc, deleteDoc, writeBatch,
+    } = await import('firebase/firestore');
+    const { host, authPort, firestorePort, projectId } = PARTY.emulator;
+    const apps = [];
+    const connect = async (name, signedIn = true) => {
+        const app = initializeApp({ projectId, apiKey: projectId }, name);
+        apps.push(app);
+        const db = getFirestore(app);
+        connectFirestoreEmulator(db, host, firestorePort);
+        if (!signedIn) return { db };
+        const auth = getAuth(app);
+        connectAuthEmulator(auth, `http://${host}:${authPort}`, { disableWarnings: true });
+        const { user } = await signInAnonymously(auth);
+        return { db, uid: user.uid };
     };
-    const [owner, guest] = await Promise.all([signup(), signup()]);
     const code = partyCode();
     assert.ok(validCode(code));
-    const request = (user, method, path = '', value) => {
-        const url = new URL(`http://${host}:${databasePort}/${PARTY.root}/${code}${path}.json`);
-        url.searchParams.set('ns', `${projectId}-default-rtdb`);
-        if (user) url.searchParams.set('auth', user.idToken);
-        return fetch(url, { method, body: value === undefined ? undefined : JSON.stringify(value) });
-    };
+    const room = ({ db }) => doc(db, PARTY.root, code);
+    const membership = (client, uid = client.uid) => doc(room(client), PARTY.members, uid);
+    const denied = (operation) => assert.rejects(operation, { code: 'permission-denied' });
+    const newMember = (name) => ({ name, status: MEMBER.active, permissions: NO_PERMISSIONS, lastSeen: null, heartbeatId: null });
     const playback = initialPlayback(0, Date.now());
-    const created = await request(owner, 'PUT', '', {
-        host: owner.localId,
-        media: { type: 'movie', id: 'tt0000001', videoId: 'tt0000001' },
-        bufferSeconds: 2,
-        createdAt: { '.sv': 'timestamp' },
-        playback,
-        members: { [owner.localId]: 'active' },
-    });
-    assert.equal(created.status, 200, await created.text());
+    const episode = { type: 'series', id: 'tt0000001', videoId: 'tt0000001:1:2' };
+    let unsubscribe;
+
     try {
-        assert.equal((await request(guest, 'GET')).status, 401);
-        assert.equal((await request(null, 'GET')).status, 401);
-        const guestMembership = `/members/${guest.localId}`;
-        assert.equal((await request(guest, 'PUT', guestMembership, 'active')).status, 200);
-        assert.equal((await request(guest, 'GET')).status, 200);
-        const command = nextPlayback(playback, { kind: 'play', position: 0 }, Date.now());
-        assert.equal((await request(guest, 'PUT', '/playback', command)).status, 401);
-        assert.equal((await request(guest, 'PUT', '/bufferSeconds', 5)).status, 401);
-        assert.equal((await request(owner, 'PUT', '/bufferSeconds', 5)).status, 200);
-        assert.equal((await request(owner, 'PUT', '/playback', command)).status, 200);
-        assert.equal((await request(owner, 'PUT', '/playback', command)).status, 401);
-        assert.equal((await request(owner, 'PUT', guestMembership, 'kicked')).status, 200);
-        assert.equal((await request(guest, 'GET')).status, 401);
-        assert.equal((await request(guest, 'PUT', guestMembership, 'active')).status, 401);
+        const [owner, guest, visitor] = await Promise.all([connect('host'), connect('guest'), connect('visitor', false)]);
+        const batch = writeBatch(owner.db);
+        batch.set(room(owner), {
+            host: owner.uid, media: null, mediaRevision: 0, bufferSeconds: PARTY.defaultBufferSeconds,
+            createdAt: serverTimestamp(), endedAt: null, playback,
+        });
+        batch.set(membership(owner), newMember('Host'));
+        await batch.commit();
+
+        await denied(getDocFromServer(room(visitor)));
+        await denied(getDocFromServer(room(guest)));
+        await denied(setDoc(membership(guest), { ...newMember('Guest'), permissions: { ...NO_PERMISSIONS, seek: true } }));
+        await setDoc(membership(guest), newMember('Guest'));
+        assert.equal((await getDocFromServer(room(guest))).data().media, null);
+        await updateDoc(membership(guest), { name: 'Sam' });
+        assert.equal((await getDocFromServer(membership(owner, guest.uid))).data().name, 'Sam');
+
+        const titleChange = new Promise((resolve, reject) => {
+            unsubscribe = onSnapshot(room(guest), (snapshot) => {
+                if (!snapshot.metadata.fromCache && snapshot.data()?.mediaRevision === 1) resolve(snapshot.data());
+            }, reject);
+        });
+        const change = { media: episode, mediaRevision: 1, playback };
+        await denied(updateDoc(room(guest), change));
+        await updateDoc(room(owner), change);
+        assert.deepEqual((await titleChange).media, episode);
+        unsubscribe();
+        unsubscribe = undefined;
+        await denied(updateDoc(room(owner), { ...change, media: { ...episode, videoId: 'tt0000001:1:3' } }));
+        await updateDoc(membership(owner), { lastSeen: serverTimestamp(), heartbeatId: partyCode() });
+
+        const play = () => nextPlayback(playback, { kind: COMMAND.play, position: 0 }, Date.now());
+        const seek = (from) => nextPlayback(from, { kind: COMMAND.seek, position: 24000 }, Date.now());
+        await denied(updateDoc(room(guest), { playback: play() }));
+        await denied(updateDoc(room(guest), { playback: seek(playback) }));
+        await denied(updateDoc(room(guest), { bufferSeconds: 5 }));
+        await denied(updateDoc(membership(guest), 'permissions.playPause', true));
+
+        await updateDoc(membership(owner, guest.uid), 'permissions.playPause', true);
+        await denied(updateDoc(room(guest), { playback: seek(playback) }));
+        const forgedPlay = play();
+        forgedPlay.target.position = 24000;
+        await denied(updateDoc(room(guest), { playback: forgedPlay }));
+        const playing = play();
+        await updateDoc(room(guest), { playback: playing });
+        await denied(updateDoc(room(guest), { playback: playing }));
+        const pause = () => nextPlayback(playing, { kind: COMMAND.pause, position: 0 }, Date.now());
+        await updateDoc(membership(owner, guest.uid), { permissions: { playPause: false, seek: true } });
+        await denied(updateDoc(room(guest), { playback: pause() }));
+        const forgedSeek = seek(playing);
+        forgedSeek.autoResume = false;
+        await denied(updateDoc(room(guest), { playback: forgedSeek }));
+        await updateDoc(room(guest), { playback: seek(playing) });
+
+        await deleteDoc(membership(guest));
+        await denied(getDocFromServer(room(guest)));
+        await setDoc(membership(guest), newMember('Sam'));
+        assert.equal((await getDocFromServer(room(guest))).data().mediaRevision, 1);
+        await updateDoc(membership(owner, guest.uid), { status: MEMBER.kicked });
+        await denied(getDocFromServer(room(guest)));
+        await denied(deleteDoc(membership(guest)));
+        await denied(setDoc(membership(guest), newMember('Sam')));
+
+        await updateDoc(room(owner), { endedAt: serverTimestamp() });
+        assert.ok((await getDocFromServer(room(owner))).data().endedAt);
+        await denied(updateDoc(room(owner), { bufferSeconds: 5 }));
     } finally {
-        assert.equal((await request(owner, 'DELETE')).status, 200);
+        unsubscribe?.();
+        await Promise.all(apps.map(deleteApp));
     }
 });

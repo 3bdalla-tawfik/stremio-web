@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import useLiveRef from 'stremio/common/useLiveRef';
 import { useParty } from './PartyProvider';
-import { PARTY, STATUS, guestPlaybackAction, playbackReady, pointAt, positionAt, sameMedia, type Media, type PlaybackState } from './model';
+import { COMMAND, PARTY, STATUS, guestPlaybackAction, memberOnline, playbackReady, pointAt, positionAt, sameMedia, type Media, type PlaybackState } from './model';
 
 type Video = {
     state: PlaybackState & {
@@ -23,7 +23,10 @@ function enoughVideo(state: Video['state'], position: number, seconds: number, r
 export default function usePartyPlayback(video: Video, media: Media | null, focused: boolean) {
     const party = useParty();
     const { code, room, isHost, setStatus } = party;
-    const active = focused && room !== null && sameMedia(media, room.media);
+    const active = focused && room !== null && room.media !== null && sameMedia(media, room.media);
+    const mediaRevision = room?.mediaRevision;
+    const canPlayPause = !active || isHost || party.permissions.playPause;
+    const canSeek = !active || isHost || party.permissions.seek;
     const latest = useLiveRef({ party, video });
 
     useEffect(() => {
@@ -39,14 +42,14 @@ export default function usePartyPlayback(video: Video, media: Media | null, focu
         const synchronize = () => {
             const { party: current, video: player } = latest.current;
             const state: Video['state'] = player.state;
-            if (!current.room || current.code !== code) return;
+            if (!current.room || current.room.mediaRevision !== mediaRevision || current.code !== code) return;
             if (state.stream !== lastStream) {
                 lastStream = state.stream;
                 lastSeek = -Infinity;
                 readySince = null;
                 waitingForBuffer = true;
             }
-            const { playback, host, bufferSeconds, presence } = current.room;
+            const { playback, host, bufferSeconds } = current.room;
             const now = current.now();
             // mpv emits its ready event after the first frame. Let the original
             // load finish before the party sends pause or seek commands.
@@ -55,7 +58,7 @@ export default function usePartyPlayback(video: Video, media: Media | null, focu
                 return;
             }
             const { time, duration } = state;
-            if (!current.connected || (!current.isHost && !presence?.[host])) {
+            if (!current.connected || (!current.isHost && !memberOnline(current.members[host], now))) {
                 if (state.paused === false) player.setPaused(true);
                 waitingForBuffer = true;
                 readySince = null;
@@ -104,7 +107,8 @@ export default function usePartyPlayback(video: Video, media: Media | null, focu
                     setStatus(STATUS.syncing);
                     return;
                 }
-                if (playback.autoResume && !playback.target.playing && now >= playback.target.at) {
+                const newTitle = current.room.mediaRevision > 0 && playback.kind === COMMAND.initial;
+                if ((newTitle || playback.autoResume) && !playback.target.playing && now >= playback.target.at) {
                     setStatus(STATUS.hostBuffering);
                     if (canResume && distance <= PARTY.softDriftMs) current.publish({ kind: 'play', position });
                 } else {
@@ -144,35 +148,41 @@ export default function usePartyPlayback(video: Video, media: Media | null, focu
             const current = latest.current;
             if (current.video.state.loaded && current.video.state.stream === lastStream) current.video.setPaused(true);
             const playback = current.party.room?.playback;
-            if (isHost && current.party.code === code && (playback?.target.playing || playback?.autoResume)) {
+            if (isHost && current.party.code === code && current.party.room?.mediaRevision === mediaRevision &&
+                (playback?.target.playing || playback?.autoResume)) {
                 current.party.publish({ kind: 'hold', position: lastPosition });
             }
             setStatus(STATUS.loading);
         };
-    }, [active, code, isHost, setStatus]);
+    }, [active, code, isHost, latest, mediaRevision, setStatus]);
 
     const request = useCallback((playing: boolean) => {
         const { party: current, video: player } = latest.current;
+        if (!active || !current.room || !canPlayPause) return;
+        if (!current.isHost) {
+            current.publish({ kind: playing ? COMMAND.play : COMMAND.pause, position: 0 });
+            return;
+        }
         const time = player.state.time ?? (playing ? null : player.state.duration);
-        if (!active || !current.isHost || time === null || !current.room) return;
+        if (time === null) return;
         if (playing && (player.state.buffered === null || !enoughVideo(player.state, time, current.room.bufferSeconds, 0))) {
             current.publish({ kind: 'buffer', position: time });
         } else {
             current.publish({ kind: playing ? 'play' : 'pause', position: time });
         }
-    }, [active]);
+    }, [active, canPlayPause, latest]);
 
     const seek = useCallback((position: number) => {
         if (active) latest.current.party.publish({ kind: 'seek', position });
-    }, [active]);
+    }, [active, latest]);
 
     const open = useCallback(() => {
         party.open(media && video.state.time !== null && video.state.loaded ? () => ({
             media,
             position: latest.current.video.state.time ?? 0,
         }) : undefined);
-    }, [media, party.open, video.state.time, video.state.loaded]);
+    }, [latest, media, party.open, video.state.time, video.state.loaded]);
 
     const paused = active && room ? !(room.playback.target.playing || room.playback.autoResume) : video.state.paused;
-    return { active, isHost, open, request, seek, paused };
+    return { active, isHost, canPlayPause, canSeek, open, request, seek, paused };
 }

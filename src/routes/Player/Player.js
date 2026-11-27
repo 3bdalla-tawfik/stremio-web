@@ -127,14 +127,14 @@ const Player = () => {
     const partyGuest = partyPlayback.active && !partyPlayback.isHost;
     const seekStart = livePlayback ? video.state.live?.start : 0;
     const seekEnd = livePlayback ? video.state.live?.end : video.state.duration;
-    const canSeek = !partyGuest && Number.isFinite(seekStart) && Number.isFinite(seekEnd) && seekEnd > seekStart && Number.isFinite(video.state.time);
+    const canSeek = partyPlayback.canSeek && Number.isFinite(seekStart) && Number.isFinite(seekEnd) && seekEnd > seekStart && Number.isFinite(video.state.time);
     const [nextVideoPopupDismissal, setNextVideoPopupDismissal] = React.useState(null);
     const liveEpgRange = currentEpgVideo === null ? null : getEpgTimeRange(currentEpgVideo);
     const nextVideoRemainingTime = isEpg ?
         liveEpgRange === null ? null : liveEpgRange.endTime - epgNow
         :
         video.state.time === null || video.state.duration === null ? null : video.state.duration - video.state.time;
-    const nextVideoPopupOpen = !partyPlayback.active && upcomingVideo !== null &&
+    const nextVideoPopupOpen = !partyGuest && upcomingVideo !== null &&
         (nextVideoPopupDismissal === null || nextVideoPopupDismissal.stream !== video.state.stream ||
             (isEpg && nextVideoPopupDismissal.programId !== currentEpgVideo?.id)) &&
         nextVideoRemainingTime !== null && nextVideoRemainingTime > 0 &&
@@ -261,8 +261,11 @@ const Player = () => {
         ended();
 
         if (partyPlaybackRef.current.active) {
-            partyPlaybackRef.current.request(false);
-            return;
+            if (!partyPlaybackRef.current.isHost) return;
+            if (!profile.settings.bingeWatching || player.nextVideo === null) {
+                partyPlaybackRef.current.request(false);
+                return;
+            }
         }
 
         if (isEpg) {
@@ -414,7 +417,7 @@ const Player = () => {
     }, [video.state.stream, currentEpgVideo?.id]);
 
     const onNextVideoRequested = React.useCallback(() => {
-        if (isEpg || partyPlaybackRef.current.active) {
+        if (isEpg || (partyPlaybackRef.current.active && !partyPlaybackRef.current.isHost)) {
             return;
         }
 
@@ -743,8 +746,8 @@ const Player = () => {
                     onPauseRequested();
                     break;
                 case 'next-track':
-                    if (!isEpg && !partyPlaybackRef.current.active && player.nextVideo !== null) {
-                        video.setTime(0);
+                    if (!isEpg && (!partyPlaybackRef.current.active || partyPlaybackRef.current.isHost) && player.nextVideo !== null) {
+                        if (!partyPlaybackRef.current.active) video.setTime(0);
                         onNextVideoRequested();
                     }
                     break;
@@ -848,7 +851,7 @@ const Player = () => {
 
     useShortcut('playNext', React.useCallback(() => {
         closeMenus();
-        if (!isEpg && !partyPlaybackRef.current.active && player.nextVideo !== null) {
+        if (!isEpg && (!partyPlaybackRef.current.active || partyPlaybackRef.current.isHost) && player.nextVideo !== null) {
             nextVideo();
             const deepLinks = player.nextVideo.deepLinks;
             handleNextVideoNavigation(deepLinks, false, false);
@@ -1095,7 +1098,7 @@ const Player = () => {
             <ControlBar
                 ref={controlBarRef}
                 className={classnames(styles['layer'], styles['control-bar-layer'])}
-                paused={partyGuest ? null : paused}
+                paused={partyPlayback.canPlayPause ? paused : null}
                 time={keyboardSeekTime ?? video.state.time}
                 duration={video.state.duration}
                 buffered={video.state.buffered}
@@ -1105,7 +1108,7 @@ const Player = () => {
                 subtitlesTracks={allSubtitleTracks}
                 audioTracks={video.state.audioTracks}
                 metaItem={player.metaItem}
-                nextVideo={isEpg || partyPlayback.active ? null : player.nextVideo}
+                nextVideo={isEpg || partyGuest ? null : player.nextVideo}
                 stream={player.selected !== null ? player.selected.stream : null}
                 statisticsAvailable={statisticsMenuAvailable}
                 onPlayRequested={onPlayRequested}
