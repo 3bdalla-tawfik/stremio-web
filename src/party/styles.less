@@ -59,3 +59,62 @@
     li { padding: 0.4rem 0; }
     li > :first-child { flex: 1; }
 }
+
+// Party dialog visual treatment.
+.dialog {
+    box-sizing: border-box;
+    width: min(31rem, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    padding: 2rem;
+    border-color: #51416d;
+    border-radius: 1.25rem;
+    background: radial-gradient(ellipse at 100% 0%, #493166 0%, transparent 45%), #1c1729;
+    box-shadow: 0 1.5rem 5rem #090510bb;
+    color: #f8f4ff;
+    &::backdrop { background: rgb(8 5 15 / 78%); backdrop-filter: blur(6px); }
+    button, input, select { box-sizing: border-box; padding: 0.75rem 1rem; border-color: #584b6e; border-radius: 0.65rem; background: #30283e; }
+    button { font-weight: 600; transition: background 150ms, border-color 150ms, transform 150ms; }
+    button:hover:not(:disabled) { background: #49365e; border-color: #a88acb; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #cbb1ff; outline-offset: 3px; }
+    input { letter-spacing: 0.1em; }
+    p, form { margin: 1.25rem 0; }
+    [role='alert'] { padding: 0.8rem; border-radius: 0.6rem; background: #582d40; color: #ffd1dc; }
+    [role='status'] { color: #c8bdd7; }
+}
+.header {
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    h2 { margin: 0.45rem 0 0; font-size: 2rem; letter-spacing: -0.04em; }
+    p { margin: 0.5rem 0 0; color: #c6b9d5; line-height: 1.5; }
+    button { flex-shrink: 0; background: transparent; }
+}
+.eyebrow { color: #d1b0ff; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.18em; }
+.dialog .primary {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    padding: 1rem 1.15rem;
+    border-color: #ad83eb;
+    background: linear-gradient(110deg, #8154d7, #a663d8);
+    &:hover:not(:disabled) { filter: brightness(1.12); }
+}
+.codeCard { justify-content: space-between; padding: 1rem; border: 1px solid #5a4771; border-radius: 0.85rem; background: #ffffff0b; }
+.code { font-size: 1.4rem; letter-spacing: 0.14em; }
+.members {
+    list-style: none;
+    margin: 1.5rem 0;
+    padding: 0.4rem 1rem;
+    border: 1px solid #493c5b;
+    border-radius: 0.85rem;
+    background: #ffffff08;
+    li { padding: 0.75rem 0; }
+    li + li { border-top: 1px solid #493c5b; }
+    li > span:nth-child(2) { color: #c7b7da; font-size: 0.85rem; }
+}
+.dialog .leave { width: 100%; background: transparent; color: #f2bdce; }
+@media (max-width: 480px) {
+    .dialog { padding: 1.25rem; }
+    .header h2 { font-size: 1.6rem; }
+    .dialog form.row { flex-wrap: wrap; }
+    .dialog form.row label { width: 100%; }
+}

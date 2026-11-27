@@ -173,12 +173,16 @@ export function PartyProvider({ children }: React.PropsWithChildren) {
             {children}
             <dialog className={styles.dialog} ref={dialog} aria-label={title} onClose={() => setCopied(false)}>
                 <header className={styles.header}>
-                    <h2>{title}</h2>
+                    <div>
+                        <span className={styles.eyebrow}>{t('WATCH_PARTY_EYEBROW', { defaultValue: 'BETTER TOGETHER' })}</span>
+                        <h2>{title}</h2>
+                        <p>{t('WATCH_PARTY_SUBTITLE', { defaultValue: 'Your screen. Your people. One moment.' })}</p>
+                    </div>
                     <button type={'button'} onClick={() => dialog.current?.close()}>{t('BUTTON_CLOSE')}</button>
                 </header>
                 {session && room ? (
                     <>
-                        <p className={styles.row}>
+                        <p className={`${styles.row} ${styles.codeCard}`}>
                             <strong className={styles.code}>{session.code}</strong>
                             <button type={'button'} onClick={() => void run(async () => {
                                 await navigator.clipboard.writeText(session.code);
@@ -199,7 +203,7 @@ export function PartyProvider({ children }: React.PropsWithChildren) {
                                 </select>
                             </label>
                         ) : null}
-                        <button type={'button'} onClick={() => openMedia(room.media)}>{t('WATCH_PARTY_CHOOSE_STREAM', { defaultValue: 'Choose stream' })}</button>
+                        <button className={styles.primary} type={'button'} onClick={() => openMedia(room.media)}>{t('WATCH_PARTY_CHOOSE_STREAM', { defaultValue: 'Choose stream' })}</button>
                         <ul className={styles.members} aria-label={t('WATCH_PARTY_MEMBERS', { defaultValue: 'Party members' })}>
                             {players.map((uid, index) => (
                                 <li className={styles.row} key={uid}>
@@ -216,7 +220,7 @@ export function PartyProvider({ children }: React.PropsWithChildren) {
                                 </li>
                             ))}
                         </ul>
-                        <button type={'button'} disabled={pending || !connected} onClick={() => void leave()}>
+                        <button className={styles.leave} type={'button'} disabled={pending || !connected} onClick={() => void leave()}>
                             {isHost ? t('WATCH_PARTY_END', { defaultValue: 'End party' }) : t('WATCH_PARTY_LEAVE', { defaultValue: 'Leave party' })}
                         </button>
                     </>
@@ -225,7 +229,7 @@ export function PartyProvider({ children }: React.PropsWithChildren) {
                 ) : (
                     <>
                         {canCreate ? (
-                            <button type={'button'} disabled={pending} onClick={() => void create()}>{t('WATCH_PARTY_CREATE', { defaultValue: 'Create party' })}</button>
+                            <button className={styles.primary} type={'button'} disabled={pending} onClick={() => void create()}>{t('WATCH_PARTY_CREATE', { defaultValue: 'Create party' })} <span aria-hidden={'true'}>✦</span></button>
                         ) : (
                             <p>{t('WATCH_PARTY_CREATE_HINT', { defaultValue: 'Open a movie or episode to create a party.' })}</p>
                         )}
