@@ -93,7 +93,22 @@
 .dialog form > label { flex: 1; min-width: 0; }
 .memberName { flex: 1; overflow-wrap: anywhere; }
 .permissionList { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0 0; }
-.permissionList input[type='checkbox'] { flex: none; accent-color: #cbb1ff; }
+.permissionList:not(:disabled) label { cursor: pointer; }
+.permissionList:disabled { opacity: 0.65; }
+.dialog .permissionList input[type='checkbox'] {
+    appearance: auto;
+    flex: none;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin: 0;
+    padding: 0;
+    border: revert;
+    border-radius: revert;
+    background: revert;
+    accent-color: #cbb1ff;
+    color-scheme: dark;
+    cursor: inherit;
+}
 .dialog .primary {
     display: flex;
     justify-content: space-between;
