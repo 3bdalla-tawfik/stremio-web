@@ -47,6 +47,8 @@ flowchart LR
 
 ## 🚀 Getting started
 
+For setup and usage of the Windows fork, see [Watch Party on Windows](WATCH_PARTY.md).
+
 You'll need [Node.js](https://nodejs.org) 22+ and [pnpm](https://pnpm.io/installation) 11+.
 
 ```bash

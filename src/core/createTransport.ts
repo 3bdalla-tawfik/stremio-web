@@ -1,6 +1,6 @@
 import Bridge from '@stremio/stremio-core-web/bridge';
 
-const worker = new Worker(`${process.env.COMMIT_HASH}/scripts/worker.js`);
+const worker = new Worker(`${process.env.ASSET_PATH}/scripts/worker.js`);
 const bridge = new Bridge(window, worker);
 
 const createTransport = (): CoreTransport => {

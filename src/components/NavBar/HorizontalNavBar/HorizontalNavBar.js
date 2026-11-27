@@ -7,14 +7,16 @@ const classnames = require('classnames');
 const { default: Icon } = require('@stremio/stremio-icons/react');
 const { Button, Image } = require('stremio/components');
 const { useFullscreen } = require('stremio/common/Fullscreen');
+const { useParty } = require('stremio/party/PartyProvider');
 const { useHorizontalNavGamepadNavigation } = require('stremio/services/GamepadNavigation');
 const SearchBar = require('./SearchBar');
 const NavMenu = require('./NavMenu');
 const styles = require('./styles');
 const { t } = require('i18next');
 
-const HorizontalNavBar = React.memo(({ className, route, query, title, backButton, searchBar, fullscreenButton, navMenu, originPath, onBackButtonClick, hdrInfo, ...props }) => {
+const HorizontalNavBar = React.memo(({ className, route, query, title, backButton, searchBar, fullscreenButton, navMenu, originPath, onBackButtonClick, hdrInfo, onOpenParty, ...props }) => {
     const goBack = useGoBack(originPath);
+    const party = useParty();
     const [fullscreen, requestFullscreen, exitFullscreen, , supported] = useFullscreen();
     const renderNavMenuLabel = React.useCallback(({ ref, className, onClick, children, }) => (
         <Button ref={ref} className={classnames(className, styles['button-container'], styles['menu-button-container'])} tabIndex={-1} onClick={onClick}>
@@ -52,6 +54,11 @@ const HorizontalNavBar = React.memo(({ className, route, query, title, backButto
                     null
             }
             <div className={styles['buttons-container']}>
+                { (navMenu || onOpenParty) && (
+                    <button type={'button'} className={styles['party-button']} onClick={onOpenParty || (() => party.open())}>
+                        {t('WATCH_PARTY_TITLE', { defaultValue: 'Watch Party' })}{party.code ? ' •' : ''}
+                    </button>
+                ) }
                 {
                     hdrInfo && (hdrInfo.gamma === 'pq' || hdrInfo.gamma === 'hlg') ?
                         <div className={styles['hdr-indicator']} title={hdrInfo.gamma === 'pq' ? 'HDR10' : 'HLG'}>
@@ -92,6 +99,7 @@ HorizontalNavBar.propTypes = {
     navMenu: PropTypes.bool,
     originPath: PropTypes.string,
     onBackButtonClick: PropTypes.func,
+    onOpenParty: PropTypes.func,
     hdrInfo: PropTypes.shape({
         gamma: PropTypes.string,
     }),

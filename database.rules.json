@@ -1,0 +1,52 @@
+{
+    "rules": {
+        "watchParties": {
+            "$code": {
+                ".read": "auth != null && data.child('createdAt').val() > now - 43200000 && (data.child('host').val() == auth.uid || data.child('members').child(auth.uid).val() == 'active')",
+                ".write": "auth != null && ((!data.exists() && $code.matches(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/) && newData.child('host').val() == auth.uid && newData.child('members').child(auth.uid).val() == 'active' && newData.child('playback/revision').val() == 0) || (data.child('host').val() == auth.uid && !newData.exists()))",
+                ".validate": "newData.hasChildren(['host', 'media', 'createdAt', 'bufferSeconds', 'playback', 'members'])",
+                "host": { ".validate": "newData.isString() && newData.val() == auth.uid" },
+                "createdAt": { ".validate": "newData.isNumber() && newData.val() == now" },
+                "media": {
+                    ".validate": "newData.hasChildren(['type', 'id', 'videoId'])",
+                    "type": { ".validate": "newData.val() == 'movie' || newData.val() == 'series'" },
+                    "id": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_.:-]{1,160}$/)" },
+                    "videoId": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_.:-]{1,160}$/)" },
+                    "$other": { ".validate": false }
+                },
+                "bufferSeconds": {
+                    ".write": "auth != null && root.child('watchParties').child($code).child('host').val() == auth.uid && newData.exists()",
+                    ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 15 && newData.val() % 1 == 0"
+                },
+                "playback": {
+                    ".write": "auth != null && root.child('watchParties').child($code).child('host').val() == auth.uid && root.child('watchParties').child($code).child('createdAt').val() > now - 43200000 && newData.child('revision').val() == data.child('revision').val() + 1",
+                    ".validate": "newData.hasChildren(['previous', 'target', 'revision', 'autoResume']) && newData.child('target/at').val() >= now - 5000 && newData.child('target/at').val() <= now + 5000",
+                    "revision": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 == 0" },
+                    "autoResume": { ".validate": "newData.isBoolean()" },
+                    "$point": {
+                        ".validate": "($point == 'previous' || $point == 'target') && newData.hasChildren(['position', 'playing', 'at'])",
+                        "position": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 86400000" },
+                        "playing": { ".validate": "newData.isBoolean()" },
+                        "at": { ".validate": "newData.isNumber() && newData.val() >= now - 5000 && newData.val() <= now + 5000" },
+                        "$other": { ".validate": false }
+                    }
+                },
+                "members": {
+                    "$uid": {
+                        ".write": "auth != null && root.child('watchParties').child($code).child('createdAt').val() > now - 43200000 && $uid != root.child('watchParties').child($code).child('host').val() && ((auth.uid == $uid && data.val() != 'kicked' && (!newData.exists() || newData.val() == 'active')) || (auth.uid == root.child('watchParties').child($code).child('host').val() && data.val() == 'active' && newData.val() == 'kicked'))",
+                        ".validate": "(newData.val() == 'active' || newData.val() == 'kicked') && (data.exists() || auth.uid == $uid)"
+                    }
+                },
+                "presence": {
+                    "$uid": {
+                        "$connection": {
+                            ".write": "auth != null && auth.uid == $uid && (!newData.exists() || (root.child('watchParties').child($code).child('createdAt').val() > now - 43200000 && root.child('watchParties').child($code).child('members').child($uid).val() == 'active'))",
+                            ".validate": "newData.val() == true"
+                        }
+                    }
+                },
+                "$other": { ".validate": false }
+            }
+        }
+    }
+}

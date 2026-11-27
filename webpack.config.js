@@ -2,6 +2,7 @@
 
 const path = require('path');
 const os = require('os');
+const { randomBytes } = require('crypto');
 const { execSync } = require('child_process');
 const webpack = require('webpack');
 const threadLoader = require('thread-loader');
@@ -13,6 +14,8 @@ const TerserPlugin = require('terser-webpack-plugin');
 const packageJson = require('./package.json');
 
 const COMMIT_HASH = execSync('git rev-parse HEAD').toString().trim();
+const DESKTOP_BUILD = process.env.PARTY_DESKTOP_BUILD === '1';
+const ASSET_PATH = DESKTOP_BUILD ? randomBytes(20).toString('hex') : COMMIT_HASH;
 
 const THREAD_LOADER = {
     loader: 'thread-loader',
@@ -42,7 +45,7 @@ module.exports = (env, argv) => ({
     },
     output: {
         path: path.join(__dirname, 'build'),
-        filename: `${COMMIT_HASH}/scripts/[name].js`,
+        filename: `${ASSET_PATH}/scripts/[name].js`,
         clean: true,
     },
     module: {
@@ -176,7 +179,7 @@ module.exports = (env, argv) => ({
                 test: /\.wasm$/,
                 type: 'asset/resource',
                 generator: {
-                    filename: `${COMMIT_HASH}/binaries/[name][ext][query]`
+                    filename: `${ASSET_PATH}/binaries/[name][ext][query]`
                 }
             }
         ]
@@ -189,10 +192,10 @@ module.exports = (env, argv) => ({
         }
     },
     devServer: {
-        host: '0.0.0.0',
+        host: process.env.PARTY_FIREBASE_EMULATOR === '1' ? '127.0.0.1' : '0.0.0.0',
         static: false,
         hot: false,
-        server: 'https',
+        server: process.env.PARTY_FIREBASE_EMULATOR === '1' ? 'http' : 'https',
         liveReload: false
     },
     optimization: {
@@ -218,16 +221,19 @@ module.exports = (env, argv) => ({
         new webpack.ProgressPlugin(),
         new webpack.EnvironmentPlugin({
             SENTRY_DSN: null,
+            PARTY_FIREBASE_CONFIG: null,
+            PARTY_FIREBASE_EMULATOR: null,
             ...env,
-            SERVICE_WORKER_DISABLED: false,
+            SERVICE_WORKER_DISABLED: DESKTOP_BUILD,
             DEBUG: argv.mode !== 'production',
             VERSION: packageJson.version,
-            COMMIT_HASH
+            COMMIT_HASH,
+            ASSET_PATH,
         }),
         new webpack.ProvidePlugin({
             Buffer: ['buffer', 'Buffer']
         }),
-        argv.mode === 'production' &&
+        argv.mode === 'production' && !DESKTOP_BUILD &&
             new WorkboxPlugin.GenerateSW({
                 maximumFileSizeToCacheInBytes: 20000000,
                 clientsClaim: true,
@@ -243,7 +249,7 @@ module.exports = (env, argv) => ({
             ]
         }),
         new MiniCssExtractPlugin({
-            filename: `${COMMIT_HASH}/styles/[name].css`
+            filename: `${ASSET_PATH}/styles/[name].css`
         }),
         new HtmlWebPackPlugin({
             template: './src/index.html',

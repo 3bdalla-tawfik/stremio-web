@@ -6,7 +6,10 @@ const { useSearchParams } = require('react-router-dom');
 const classnames = require('classnames');
 const debounce = require('lodash.debounce');
 const { useTranslation } = require('react-i18next');
-const { default: useRouteFocused } = require('stremio/common/useRouteFocused');
+const { default: useRouteFocused, useRouteActive } = require('stremio/common/useRouteFocused');
+const useLiveRef = require('stremio/common/useLiveRef');
+const { getPartyMedia } = require('stremio/party/model');
+const { default: usePartyPlayback } = require('stremio/party/usePartyPlayback');
 const { useCore } = require('stremio/core');
 const { useServices, useGamepad } = require('stremio/services');
 const { useContentGamepadNavigation } = require('stremio/services/GamepadNavigation');
@@ -76,6 +79,7 @@ const Player = () => {
     const statistics = useStatistics(player, streamingServer);
     const video = useVideo();
     const routeFocused = useRouteFocused();
+    const routeActive = useRouteActive();
     const platform = usePlatform();
     const toast = useToast();
     const discord = useDiscord();
@@ -116,16 +120,21 @@ const Player = () => {
     const upcomingVideo = isEpg ? player.live?.nextProgram ?? null : player.nextVideo;
     const epgNow = useLiveRefresh('Player', 'player', isEpg, EPG_PLAYER_NOW_REFRESH_INTERVAL);
     const livePlayback = isEpg || video.state.live !== null;
+    const partyMedia = React.useMemo(() => !livePlayback && !casting ? getPartyMedia(type, id, videoId) : null, [type, id, videoId, livePlayback, casting]);
+    const partyPlayback = usePartyPlayback(video, partyMedia, routeActive);
+    const partyPlaybackRef = useLiveRef(partyPlayback);
+    const paused = partyPlayback.paused;
+    const partyGuest = partyPlayback.active && !partyPlayback.isHost;
     const seekStart = livePlayback ? video.state.live?.start : 0;
     const seekEnd = livePlayback ? video.state.live?.end : video.state.duration;
-    const canSeek = Number.isFinite(seekStart) && Number.isFinite(seekEnd) && seekEnd > seekStart && Number.isFinite(video.state.time);
+    const canSeek = !partyGuest && Number.isFinite(seekStart) && Number.isFinite(seekEnd) && seekEnd > seekStart && Number.isFinite(video.state.time);
     const [nextVideoPopupDismissal, setNextVideoPopupDismissal] = React.useState(null);
     const liveEpgRange = currentEpgVideo === null ? null : getEpgTimeRange(currentEpgVideo);
     const nextVideoRemainingTime = isEpg ?
         liveEpgRange === null ? null : liveEpgRange.endTime - epgNow
         :
         video.state.time === null || video.state.duration === null ? null : video.state.duration - video.state.time;
-    const nextVideoPopupOpen = upcomingVideo !== null &&
+    const nextVideoPopupOpen = !partyPlayback.active && upcomingVideo !== null &&
         (nextVideoPopupDismissal === null || nextVideoPopupDismissal.stream !== video.state.stream ||
             (isEpg && nextVideoPopupDismissal.programId !== currentEpgVideo?.id)) &&
         nextVideoRemainingTime !== null && nextVideoRemainingTime > 0 &&
@@ -155,7 +164,7 @@ const Player = () => {
     const [castDevicesSearching, setCastDevicesSearching] = React.useState(false);
     const castDevicesLoading = platform.shell.active && (castDevicesSearching || (streamingServer.playbackDevices !== null && streamingServer.playbackDevices.type === 'Loading'));
     const { streamingUrl: castStreamingUrl } = usePlayOnDevice(player.selected?.stream ?? null);
-    const shellCastSupported = platform.shell.active && castStreamingUrl !== null;
+    const shellCastSupported = !partyPlayback.active && platform.shell.active && castStreamingUrl !== null;
     const refreshCastDevices = React.useCallback(() => {
         if (platform.shell.active) {
             core.transport.dispatch({
@@ -221,7 +230,7 @@ const Player = () => {
         cancel: cancelPlaybackSpeedHold,
         isActive: isPlaybackSpeedHoldActive,
         consumeClick: consumePlaybackSpeedHoldClick,
-    } = usePlaybackSpeedHold(routeFocused && !menusOpen, video.state.stream, video.state.playbackSpeed, video.setPlaybackSpeed);
+    } = usePlaybackSpeedHold(routeFocused && !menusOpen && !partyPlayback.active, video.state.stream, video.state.playbackSpeed, video.setPlaybackSpeed);
     const detailsHold = React.useRef(null);
     const controlBarRef = React.useRef(null);
 
@@ -250,6 +259,11 @@ const Player = () => {
 
     const onEnded = React.useCallback(() => {
         ended();
+
+        if (partyPlaybackRef.current.active) {
+            partyPlaybackRef.current.request(false);
+            return;
+        }
 
         if (isEpg) {
             return;
@@ -281,6 +295,10 @@ const Player = () => {
 
     const onPlayRequested = React.useCallback(() => {
         setSeeking(false);
+        if (partyPlaybackRef.current.active) {
+            partyPlaybackRef.current.request(true);
+            return;
+        }
         if (stopBeforeLocalPlay()) return;
         playingOnExternalDevice.current = false;
         video.setPaused(false);
@@ -289,6 +307,10 @@ const Player = () => {
     const onPlayRequestedDebounced = React.useCallback(debounce(onPlayRequested, 200), []);
 
     const onPauseRequested = React.useCallback(() => {
+        if (partyPlaybackRef.current.active) {
+            partyPlaybackRef.current.request(false);
+            return;
+        }
         video.setPaused(true);
     }, []);
 
@@ -310,6 +332,10 @@ const Player = () => {
             return;
         }
         const target = Math.max(seekStart, Math.min(seekEnd, time));
+        if (partyPlaybackRef.current.active) {
+            partyPlaybackRef.current.seek(target);
+            return;
+        }
         video.setTime(target);
         seek(target, video.state.duration, video.state.manifest?.name);
     }, [canSeek, seekStart, seekEnd, video.state.duration, video.state.manifest]);
@@ -388,7 +414,7 @@ const Player = () => {
     }, [video.state.stream, currentEpgVideo?.id]);
 
     const onNextVideoRequested = React.useCallback(() => {
-        if (isEpg) {
+        if (isEpg || partyPlaybackRef.current.active) {
             return;
         }
 
@@ -402,14 +428,14 @@ const Player = () => {
     }, [player.nextVideo, isEpg, handleNextVideoNavigation, profile.settings, cancelKeyboardSeek, nextVideo]);
 
     const onVideoClick = React.useCallback(() => {
-        if (video.state.paused !== null && !consumePlaybackSpeedHoldClick()) {
-            if (video.state.paused) {
+        if (paused !== null && !consumePlaybackSpeedHoldClick()) {
+            if (paused) {
                 onPlayRequestedDebounced();
             } else {
                 onPauseRequestedDebounced();
             }
         }
-    }, [video.state.paused, consumePlaybackSpeedHoldClick, onPlayRequestedDebounced, onPauseRequestedDebounced]);
+    }, [paused, consumePlaybackSpeedHoldClick, onPlayRequestedDebounced, onPauseRequestedDebounced]);
 
     const onVideoDoubleClick = React.useCallback(() => {
         onPlayRequestedDebounced.cancel();
@@ -461,15 +487,15 @@ const Player = () => {
     }, []);
 
     const onPlayPause = React.useCallback(() => {
-        if (!menusOpen && !nextVideoPopupOpen && video.state.paused !== null) {
-            if (video.state.paused) {
+        if (!menusOpen && !nextVideoPopupOpen && paused !== null) {
+            if (paused) {
                 onPlayRequested();
                 setSeeking(false);
             } else {
                 onPauseRequested();
             }
         }
-    }, [menusOpen, nextVideoPopupOpen, video.state.paused]);
+    }, [menusOpen, nextVideoPopupOpen, paused]);
 
     const onSeekPrev = React.useCallback((event) => {
         if (canSeek && !menusOpen && !nextVideoPopupOpen && video.state.time !== null) {
@@ -612,11 +638,11 @@ const Player = () => {
 
     React.useEffect(() => {
         const speed = player.streamState?.playbackSpeed;
-        if (video.state.stream === null || !video.state.manifest?.props.includes('playbackSpeed') || typeof speed !== 'number') {
+        if (video.state.stream === null || !video.state.manifest?.props.includes('playbackSpeed')) {
             return;
         }
 
-        video.setPlaybackSpeed(speed);
+        if (typeof speed === 'number') video.setPlaybackSpeed(speed);
     }, [player.streamState?.playbackSpeed, video.state.manifest, video.state.stream, video.setPlaybackSpeed]);
 
     React.useEffect(() => {
@@ -669,10 +695,10 @@ const Player = () => {
     }, []);
 
     React.useEffect(() => {
-        if (settings.pauseOnMinimize && (platform.shell.state.windowClosed || platform.shell.state.windowHidden)) {
+        if (!partyPlayback.active && settings.pauseOnMinimize && (platform.shell.state.windowClosed || platform.shell.state.windowHidden)) {
             onPauseRequested();
         }
-    }, [settings.pauseOnMinimize, platform.shell.state.windowClosed, platform.shell.state.windowHidden]);
+    }, [partyPlayback.active, settings.pauseOnMinimize, platform.shell.state.windowClosed, platform.shell.state.windowHidden]);
 
     React.useEffect(() => {
         if (video.state.stream === null || typeof player?.title !== 'string') {
@@ -706,8 +732,8 @@ const Player = () => {
         const onMediaKey = (action) => {
             switch (action) {
                 case 'play-pause':
-                    if (video.state.paused !== null) {
-                        video.state.paused ? onPlayRequested() : onPauseRequested();
+                    if (paused !== null) {
+                        paused ? onPlayRequested() : onPauseRequested();
                     }
                     break;
                 case 'play':
@@ -717,7 +743,7 @@ const Player = () => {
                     onPauseRequested();
                     break;
                 case 'next-track':
-                    if (!isEpg && player.nextVideo !== null) {
+                    if (!isEpg && !partyPlaybackRef.current.active && player.nextVideo !== null) {
                         video.setTime(0);
                         onNextVideoRequested();
                     }
@@ -726,7 +752,7 @@ const Player = () => {
         };
         platform.shell.on('media-key', onMediaKey);
         return () => platform.shell.off('media-key', onMediaKey);
-    }, [isEpg, video.state.paused, player.nextVideo, onPlayRequested, onPauseRequested, onNextVideoRequested]);
+    }, [isEpg, paused, player.nextVideo, onPlayRequested, onPauseRequested, onNextVideoRequested]);
 
     useShortcut('seekForward', React.useCallback((combo) => {
         const seekDuration = combo === 1 ? settings.seekShortTimeDuration : settings.seekTimeDuration;
@@ -822,7 +848,7 @@ const Player = () => {
 
     useShortcut('playNext', React.useCallback(() => {
         closeMenus();
-        if (!isEpg && player.nextVideo !== null) {
+        if (!isEpg && !partyPlaybackRef.current.active && player.nextVideo !== null) {
             nextVideo();
             const deepLinks = player.nextVideo.deepLinks;
             handleNextVideoNavigation(deepLinks, false, false);
@@ -849,6 +875,10 @@ const Player = () => {
             const keyboardKey = getKeyboardShortcutKey(e);
             if (keyboardKey !== 'Space' || e.repeat) return;
             if (menusOpen || detailsHold.current !== null || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+            if (partyPlaybackRef.current.active) {
+                if (!e.target.closest?.('dialog, button, input, select, textarea')) onPlayPause();
+                return;
+            }
 
             startPlaybackSpeedHold('keyboard');
         };
@@ -938,7 +968,7 @@ const Player = () => {
             window.removeEventListener('mouseup', onMouseUp);
             window.removeEventListener('blur', onBlur);
         };
-    }, [routeFocused, menusOpen, video.state.volume, video.state.paused, finishDetailsHold, releaseDetailsHold, cancelKeyboardSeek, flushKeyboardSeek, releaseKeyboardSeek, startPlaybackSpeedHold, finishPlaybackSpeedHold, cancelPlaybackSpeedHold]);
+    }, [routeFocused, menusOpen, video.state.volume, video.state.paused, finishDetailsHold, releaseDetailsHold, cancelKeyboardSeek, flushKeyboardSeek, releaseKeyboardSeek, startPlaybackSpeedHold, finishPlaybackSpeedHold, cancelPlaybackSpeedHold, onPlayPause]);
 
     React.useEffect(() => {
         video.events.on('error', onError);
@@ -1039,7 +1069,7 @@ const Player = () => {
                 <OptionsMenu
                     className={classnames(styles['layer'], styles['menu-layer'])}
                     stream={player?.selected?.stream}
-                    playbackDevices={playbackDevices}
+                    playbackDevices={partyPlayback.active ? [] : playbackDevices}
                     extraSubtitlesTracks={extraSubtitleTracks}
                     selectedExtraSubtitlesTrackId={selectedExtraSubtitleTrackId}
                 />
@@ -1050,6 +1080,7 @@ const Player = () => {
                 backButton={true}
                 fullscreenButton={true}
                 hdrInfo={video.state.hdrInfo}
+                onOpenParty={partyPlayback.open}
                 onMouseDown={onBarMouseDown}
             />
             {
@@ -1064,7 +1095,7 @@ const Player = () => {
             <ControlBar
                 ref={controlBarRef}
                 className={classnames(styles['layer'], styles['control-bar-layer'])}
-                paused={video.state.paused}
+                paused={partyGuest ? null : paused}
                 time={keyboardSeekTime ?? video.state.time}
                 duration={video.state.duration}
                 buffered={video.state.buffered}
@@ -1074,7 +1105,7 @@ const Player = () => {
                 subtitlesTracks={allSubtitleTracks}
                 audioTracks={video.state.audioTracks}
                 metaItem={player.metaItem}
-                nextVideo={isEpg ? null : player.nextVideo}
+                nextVideo={isEpg || partyPlayback.active ? null : player.nextVideo}
                 stream={player.selected !== null ? player.selected.stream : null}
                 statisticsAvailable={statisticsMenuAvailable}
                 onPlayRequested={onPlayRequested}
@@ -1170,7 +1201,7 @@ const Player = () => {
                 <OptionsMenu
                     className={classnames(styles['layer'], styles['menu-layer'])}
                     stream={player.selected?.stream}
-                    playbackDevices={playbackDevices}
+                    playbackDevices={partyPlayback.active ? [] : playbackDevices}
                     extraSubtitlesTracks={extraSubtitleTracks}
                     selectedExtraSubtitlesTrackId={selectedExtraSubtitleTrackId}
                 />

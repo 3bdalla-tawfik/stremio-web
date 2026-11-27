@@ -5,6 +5,7 @@ const React = require('react');
 const { useTranslation } = require('react-i18next');
 const { createPath, useLocation, useNavigate } = require('react-router');
 const { useCore } = require('stremio/core');
+const { PartyProvider } = require('stremio/party/PartyProvider');
 const { Routes, useGoBack } = require('stremio-router');
 const { Chromecast, ServicesProvider, GamepadProvider } = require('stremio/services');
 const { FullscreenProvider, ToastProvider, TooltipProvider, ShortcutsProvider, DiscordProvider, CONSTANTS, useBinaryState, useProfile, withCoreSuspender, usePlatform } = require('stremio/common');
@@ -183,7 +184,9 @@ const App = () => {
                                     <DeepLinkHandler />
                                     <ShellOpenHandler />
                                     <UpdaterBanner className={styles['updater-banner-container']} />
-                                    <ProtectedRoutes />
+                                    <PartyProvider>
+                                        <ProtectedRoutes />
+                                    </PartyProvider>
                                 </DiscordProvider>
                             </FullscreenProvider>
                         </ShortcutsProvider>

@@ -1,6 +1,10 @@
 /node_modules
 /build
+/dist
 /yarn.lock
 /npm-debug.log
+/firebase-debug.log
+/database-debug.log
+/.stremio-party.firebase.local.json
 .DS_Store
 .prettierignore

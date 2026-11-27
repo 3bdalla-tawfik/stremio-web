@@ -2,3 +2,7 @@ minimumReleaseAgeExclude:
   - '@stremio/*'
 
 blockExoticSubdeps: false
+
+allowBuilds:
+  '@firebase/util': false
+  protobufjs: false
